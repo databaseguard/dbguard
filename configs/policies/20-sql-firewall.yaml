@@ -1,0 +1,60 @@
+# SQL injection firewall.
+#
+# Classic payload families with low false-positive rates at medium
+# sensitivity. Deny enforcement maps to cgroup_skb drop when
+# ebpf.drop_enabled: true; otherwise matching still alerts (fail-open
+# observability mode). Payloads exercised by scripts/demo.sh.
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: sql-firewall
+  description: Deny SQL injection families (tautology, UNION, stacked, time-based).
+  labels:
+    tier: firewall
+spec:
+  default_action: allow
+  rules:
+    - id: sqli.tautology
+      name: Tautology bypass (OR/AND 1=1)
+      description: >
+        String literal followed by OR/AND <n>=<n>; the textbook authentication
+        bypass "' OR 1=1 --" and its numeric variants.
+      severity: critical
+      engines: [postgres, mysql, sqlite]
+      query:
+        pattern: '(?i)\b(or|and)\s+[''\"]?\d+[''\"]?\s*=\s*[''\"]?\d+'
+      actions: [deny, alert]
+
+    - id: sqli.union
+      name: UNION-based extraction
+      description: >
+        UNION [ALL] SELECT pivots a single-row lookup into arbitrary column
+        extraction (credit cards, password hashes).
+      severity: critical
+      engines: [postgres, mysql, sqlite]
+      query:
+        pattern: '(?i)union\s+(all\s+)?select'
+      actions: [deny, alert]
+
+    - id: sqli.stacked
+      name: Stacked destructive statement
+      description: >
+        A second statement piggybacked after a semicolon; only destructive
+        verbs are matched to stay clear of legitimate multi-statement batches.
+      severity: critical
+      engines: [postgres, mysql]
+      query:
+        pattern: '(?i);\s*(drop|delete|truncate|update)\s'
+      actions: [deny, alert]
+
+    - id: sqli.timebased
+      name: Time-based blind injection
+      description: >
+        Engine sleep primitives used to infer boolean answers from response
+        latency. pg_sleep/SLEEP/WAITFOR DELAY/BENCHMARK rarely appear in
+        application SQL.
+      severity: high
+      engines: [postgres, mysql]
+      query:
+        pattern: '(?i)(sleep\s*\(|pg_sleep\s*\(|waitfor\s+delay|benchmark\s*\()'
+      actions: [deny, alert]

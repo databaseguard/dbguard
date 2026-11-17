@@ -1,0 +1,42 @@
+# CiliumNetworkPolicy: allowlist for MySQL.
+#
+# Same model as the PostgreSQL policy: explicit allow, implicit deny.
+# MySQL wire protocol is L7-parseable by Cilium; statement-level filtering
+# remains DBGuard's job (sqli_firewall.bpf.c + policy engine).
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: mysql-allow-api
+  namespace: dbguard
+spec:
+  endpointSelector:
+    matchLabels:
+      k8s:app: mysql
+  ingress:
+    # Only application pods may open MySQL sessions.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:app: api-server
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+    # Health probes originate from the node; keep them working.
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP
+  # Egress allowlist: DNS only; all other egress is denied by default.
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+          rules:
+            dns:
+              - matchPattern: "*"

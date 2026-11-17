@@ -1,0 +1,81 @@
+# DBGuard DaemonSet: one privileged agent per node.
+#
+# Required because the agent:
+#   - loads/attaches eBPF programs (cgroup_skb, LSM, XDP)  -> privileged
+#   - uprobes host database processes                      -> hostPID
+#   - pins maps under /sys/fs/bpf, reads debugfs tracing   -> hostPath mounts
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dbguard
+  namespace: dbguard
+  labels:
+    app.kubernetes.io/name: dbguard
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dbguard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dbguard
+    spec:
+      serviceAccountName: dbguard
+      hostPID: true
+
+      dnsPolicy: ClusterFirst
+      tolerations:
+        # Run everywhere, including control-plane nodes.
+        - operator: Exists
+      containers:
+        - name: dbguard
+          image: dbguard:latest
+          imagePullPolicy: IfNotPresent
+          args: ["-config", "/etc/dbguard/dbguard.yaml"]
+          securityContext:
+            privileged: true
+          ports:
+            - name: api
+              containerPort: 9700
+            - name: metrics
+              containerPort: 9701
+            - name: pg-proxy
+              containerPort: 6432
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: sys-kernel-debug
+              mountPath: /sys/kernel/debug
+            - name: sys-fs-bpf
+              mountPath: /sys/fs/bpf
+            - name: sys-fs-cgroup
+              mountPath: /sys/fs/cgroup
+            - name: var-run
+              mountPath: /var/run
+            - name: config
+              mountPath: /etc/dbguard
+      volumes:
+        - name: sys-kernel-debug
+          hostPath:
+            path: /sys/kernel/debug
+            type: Directory
+        - name: sys-fs-bpf
+          hostPath:
+            path: /sys/fs/bpf
+            type: DirectoryOrCreate
+        - name: sys-fs-cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: var-run
+          hostPath:
+            path: /var/run
+            type: Directory
+        - name: config
+          configMap:
+            name: dbguard-config

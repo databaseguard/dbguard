@@ -1,0 +1,44 @@
+# sockmap (sk_msg) acceleration example.
+#
+# Cilium can short-circuit TCP service chains with sockmap: sockets of two
+# processes on the same node are redirected directly through an sk_msg BPF
+# program instead of traversing the full TCP/IP stack. For database-heavy
+# sidecar chains (app -> local proxy -> DB driver) this cuts per-message
+# latency substantially.
+#
+# How it relates to DBGuard: sockmap REDIRECTS traffic below the cgroup_skb
+# hooks used for wire-level inspection. Enable sockmap only for pods whose
+# DB path DBGuard already covers at the process boundary (uprobes on the DB
+# dispatch symbols) or accept reduced wire visibility on that hop.
+#
+# The annotation is read by Cilium's sockmap feature; it must be set on the
+# POD template annotations of the pods whose service chain should be
+# accelerated (not on the Cilium resource itself).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-server
+  namespace: dbguard
+  labels:
+    k8s:app: api-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      k8s:app: api-server
+  template:
+    metadata:
+      labels:
+        k8s:app: api-server
+      annotations:
+        # Opt this workload's socket service chain into sockmap acceleration.
+        sockmap.accel.cilium.io/enabled: "true"
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/example/api-server:1.4.2
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              value: postgres://dbguard:dbguard@postgres.dbguard.svc:5432/dbguard_test

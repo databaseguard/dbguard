@@ -1,0 +1,14 @@
+The eBPF C sources in this directory (bpf/) are dual-licensed:
+
+    SPDX-License-Identifier: GPL-2.0-only OR MIT
+
+You may use these sources under either the GNU General Public License,
+version 2, or the MIT License (see ../LICENSE), at your option.
+
+Note on the runtime license string: the compiled eBPF programs declare
+"GPL" to the Linux kernel at load time (the DBGUARD_LICENSE macro). This is
+a kernel requirement — several of the eBPF helper functions these programs
+call are usable only by modules that declare a GPL-compatible license. The
+declaration is about what the loaded program may call in the kernel; it does
+not restrict your copyright license to the source, which remains GPL-2.0 OR
+MIT as stated above.

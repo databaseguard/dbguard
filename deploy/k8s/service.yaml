@@ -1,0 +1,24 @@
+# ClusterIP service exposing the DBGuard admin API and metrics endpoints.
+# Note: with hostNetwork: true the ports are already bound on the node;
+# this Service provides a stable in-cluster DNS name (dbguard.dbguard.svc).
+apiVersion: v1
+kind: Service
+metadata:
+  name: dbguard
+  namespace: dbguard
+  labels:
+    app.kubernetes.io/name: dbguard
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dbguard
+  ports:
+    - name: api
+      port: 9700
+      targetPort: 9700
+    - name: metrics
+      port: 9701
+      targetPort: 9701
+    - name: pg-proxy
+      port: 6432
+      targetPort: 6432

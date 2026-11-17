@@ -1,0 +1,7 @@
+# Dedicated namespace for the DBGuard agent.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dbguard
+  labels:
+    app.kubernetes.io/name: dbguard

@@ -1,0 +1,25 @@
+# DBGuard default policy: allow everything, no rules.
+#
+# This file establishes the baseline verdict (allow) and documents where
+# the other policy files hook in. Rule evaluation is ordered by filename,
+# so 00-default is consulted first and deny rules in 20-*/40-*/50-* override
+# it. Keep this file rule-free; add refinements in numbered files so the
+# order documents intent.
+#
+# Files loaded from configs/policies (or /etc/dbguard/policies):
+#   00-default.yaml         baseline allow (this file)
+#   10-pii-protection.yaml  PII column monitoring + masking
+#   20-sql-firewall.yaml    SQL injection deny rules
+#   30-exfil-limits.yaml    bulk read rate limiting
+#   40-tenant-isolation.yaml cross-tenant deny rules
+#   50-rids.yaml            destructive DDL deny rules
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: default-allow
+  description: Baseline policy; allow all traffic, collect events for the audit trail.
+  labels:
+    tier: baseline
+spec:
+  default_action: allow
+  rules: []

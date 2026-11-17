@@ -1,0 +1,49 @@
+# Rate limits - evaluated LAST (highest filename number) on purpose.
+#
+# Evaluation is first-deny-wins across all policy files in filename order. These
+# rules match broadly (every query from a client / every SELECT on a hot table),
+# so if they ran earlier they would mask the specific security rules whenever
+# their window filled up. Loading them last means:
+#   - a real attack (UNION, tautology, cross-tenant, DDL, your custom rule) is
+#     caught and attributed to ITS rule, and
+#   - rate limiting only applies to queries that every specific rule allowed.
+#
+# Put your own custom rules in files numbered 70–89 so they are evaluated before
+# these rate limits.
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: rate-limits
+  description: Broad per-client and per-table rate limits (evaluated last).
+  labels:
+    tier: rate-limit
+spec:
+  default_action: allow
+  rules:
+    # Cap query rate per client (burst / scraping guard).
+    - id: fw.rate-per-client
+      name: Per-client query rate limit
+      description: >
+        At most 200 queries per 10s from any single client IP. Excess is
+        denied (back-pressure) - stops credential-stuffed scraping and runaway
+        loops. Tune 'events' up for a busy app, or set actions:[alert] to make
+        it observe-only.
+      severity: medium
+      clients: [0.0.0.0/0]
+      rate:
+        events: 200
+        window: 10s
+      actions: [deny, alert]
+
+    # Stricter cap for a specific hot table (bulk-export guard).
+    - id: fw.rate-customers-table
+      name: Rate limit reads of the customers table
+      description: Max 50 reads/min of customers per user (bulk-export guard).
+      severity: medium
+      tables: [customers]
+      query:
+        pattern: '(?i)^\s*select'
+      rate:
+        events: 50
+        window: 1m
+      actions: [deny, alert]

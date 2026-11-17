@@ -1,0 +1,12 @@
+# Keep the image build small and deterministic; the BPF/Go build only needs
+# sources, configs and the Makefile.
+build/
+.git/
+.gitignore
+*.jsonl
+*.log
+test/
+.github/
+deploy/.env
+dbguard.zip
+# docs are intentionally kept (they ship with the image)

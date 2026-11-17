@@ -1,0 +1,120 @@
+# =============================================================================
+# Query Firewall — a network-firewall-style ruleset for database queries.
+#
+# This is the "iptables for SQL" policy: ordered allow/deny rules matched on
+# WHO (source IP/CIDR, DB user, engine, database), WHAT (SQL pattern/keywords,
+# tables, columns) and HOW MUCH (rate limiting), with a default action when
+# nothing matches. Rules are evaluated top-to-bottom; the first rule whose
+# matchers all match decides the verdict. A denying action (deny/block/reset)
+# stops evaluation and enforces; alerting actions annotate and continue.
+#
+# Enforcement: deny maps to an in-kernel cgroup_skb drop / TCP reset when
+# ebpf.drop_enabled: true in dbguard.yaml; otherwise matches still alert
+# (fail-open observability). Rate limits are enforced in the control plane
+# (sliding window per subject key).
+#
+# Matcher reference (all optional; empty = match any):
+#   engines:   [postgres, mysql]           which DB engine
+#   databases: [prod, analytics]           target database/schema
+#   users:     [app_ro, reporting]         DB user (role) that issued the query
+#   clients:   [10.0.0.0/8, 192.168.1.5]   source IP or CIDR of the client
+#   tables:    [customers, payments]       any referenced table
+#   columns:   [ssn, credit_card]          any referenced column
+#   query:                                  SQL text matcher
+#     pattern: '(?i)drop\s+table'           Go regexp
+#     keywords: [into outfile, load_file]   ANY-of substrings
+#     case_insensitive: true
+#     min_length: 0
+#   rate:                                   throttle matched subject
+#     events: 100                           max matches...
+#     window: 1s                            ...per window (10s, 1m, 1h)
+#   actions: [deny, alert]                  allow | deny | alert | block | reset
+# =============================================================================
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: query-firewall
+  description: Network-firewall-style allow/deny/rate rules for DB queries.
+  labels:
+    tier: firewall
+spec:
+  # What happens when NO rule below matches. "allow" = default-permit
+  # (blocklist model); "deny" = default-deny (allowlist / zero-trust model).
+  default_action: allow
+
+  rules:
+    # ---- 1. SOURCE control: only app subnets may reach the prod database ----
+    # Default-permit example: deny any client OUTSIDE the allowed subnets.
+    # (Flip default_action to "deny" and invert these for a strict allowlist.)
+    - id: fw.block-foreign-sources
+      name: Block clients outside the application subnets
+      description: Only 10.20.0.0/16 (app tier) and 127.0.0.1 may query prod.
+      severity: high
+      databases: [prod]
+      clients: [0.0.0.0/0]          # matches everything...
+      actions: [alert]              # ...but see the allow rule above it in a
+                                    # real allowlist; here we just alert.
+
+    # ---- 2. Read-only users must never write ----
+    - id: fw.ro-no-writes
+      name: Read-only role attempted a write
+      description: The app_ro / reporting roles may only SELECT.
+      severity: high
+      users: [app_ro, reporting]
+      query:
+        pattern: '(?i)^\s*(insert|update|delete|drop|alter|truncate|create|grant)\b'
+      actions: [deny, alert]
+
+    # ---- 3. Protect sensitive columns from ad-hoc access ----
+    - id: fw.sensitive-columns
+      name: Direct access to sensitive columns
+      description: Block queries that touch ssn / credit_card outside the app user.
+      severity: high
+      columns: [ssn, credit_card, password, card_number]
+      users: []                     # any user except those explicitly allowed
+                                    # by an earlier allow rule
+      actions: [deny, alert]
+
+    # ---- 4. Block destructive DDL on production entirely ----
+    - id: fw.no-ddl-prod
+      name: Destructive DDL on production
+      description: DROP / TRUNCATE / ALTER are never allowed on prod at runtime.
+      severity: critical
+      databases: [prod]
+      query:
+        pattern: '(?i)\b(drop\s+table|truncate\s+table|drop\s+database|alter\s+table)\b'
+      actions: [deny, alert]
+
+    # ---- 5. Block file / OS access primitives (exfil & RCE surface) ----
+    - id: fw.block-file-primitives
+      name: File/OS access via SQL
+      description: INTO OUTFILE, LOAD_FILE, COPY ... TO PROGRAM, pg_read_file.
+      severity: critical
+      query:
+        keywords:
+          - into outfile
+          - load_file
+          - 'copy '
+          - pg_read_file
+          - lo_import
+        case_insensitive: true
+      actions: [deny, alert]
+
+    # NOTE: the broad per-client / per-table RATE LIMIT rules were moved to
+    # 90-rate-limits.yaml so they evaluate LAST. Because evaluation is
+    # first-deny-wins, a catch-all rate rule here would mask the specific
+    # security rules (SQLi, tenant, PII, your own rules) whenever its window was
+    # full. Keeping rate limits last means a UNION still trips sqli.union, a
+    # cross-tenant read still trips tenant.*, etc., and rate limiting only
+    # catches otherwise-allowed bulk traffic.
+
+    # ---- 8. ALLOWLIST example (for default_action: deny) ----
+    # With default_action: deny, these are the ONLY permitted shapes.
+    # - id: fw.allow-app-selects
+    #   name: Allow parameterized SELECTs from the app user
+    #   users: [app_rw]
+    #   clients: [10.20.0.0/16]
+    #   query:
+    #     pattern: '(?i)^\s*select'
+    #   actions: [allow]
+

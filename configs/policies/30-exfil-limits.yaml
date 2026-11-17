@@ -1,0 +1,30 @@
+# Exfiltration limits.
+#
+# exfil.bulk complements the kernel-side byte-density breaker
+# (exfil_breaker.bpf.c, configured under exfil: in dbguard.yaml): the kernel
+# counts bytes per 100ms window on the socket, this rule throttles the
+# logical pattern "SELECT * FROM <anything>" per subject. rate_limit keeps
+# the session alive but caps it; use [deny] to terminate immediately.
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: exfil-limits
+  description: Rate-limit bulk SELECT * reads before they become dumps.
+  labels:
+    tier: exfil
+spec:
+  default_action: allow
+  rules:
+    - id: exfil.bulk
+      name: Bulk table read rate limit
+      description: >
+        More than three unbounded SELECT * statements within ten seconds
+        from one subject indicates staging/dumping rather than app traffic.
+      severity: medium
+      engines: [postgres, mysql, sqlite]
+      query:
+        pattern: '(?i)select\s+\*.*from'
+      rate:
+        events: 3
+        window: 10s
+      actions: [alert, rate_limit]

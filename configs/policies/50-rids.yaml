@@ -1,0 +1,31 @@
+# RIDS-adjacent policy: destructive DDL from any session.
+#
+# Policy documents match SQL only. Host-level runtime intrusion detection
+# (shell spawn from the DB service account, reads of data-directory files,
+# FIM hash changes) is configured in the rids: section of dbguard.yaml and
+# reported as rids.execve / rids.file_access / rids.integrity events; those
+# cannot be expressed here because they carry no SQL text.
+#
+# This file therefore covers the SQL-side of "someone got a DB shell":
+# DROP DATABASE / DROP TABLE / TRUNCATE from any user is denied outright.
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: destructive-ddl
+  description: Deny DROP DATABASE/SCHEMA/TABLE and TRUNCATE from any session.
+  labels:
+    tier: rids
+spec:
+  default_action: allow
+  rules:
+    - id: rids.destructive_ddl
+      name: Destructive DDL
+      description: >
+        Database or table destruction is never part of application traffic.
+        Legitimate migrations should run under a dedicated account listed in
+        users: (empty here means everyone is subject to the rule).
+      severity: critical
+      engines: [postgres, mysql]
+      query:
+        pattern: '(?i)\b(drop\s+(table|database|schema)\b|truncate\s+table\b)'
+      actions: [deny, alert]

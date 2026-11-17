@@ -1,0 +1,50 @@
+# EXAMPLE - identity-based database access (requires identity.cilium_enabled).
+#
+# This file lives under examples/ so it is NOT auto-loaded (the engine skips
+# subdirectories). To use it, copy it into configs/policies/ as e.g.
+# 80-identity-access.yaml and restart/reload.
+#
+# WARNING: it uses default_action: deny. With Cilium DISABLED no connection has
+# an identity, so EVERY query would be denied. Only enable this when
+# identity.cilium_enabled: true and the Cilium agent can resolve your client
+# IPs - otherwise you will lock yourself out.
+#
+# An `identities:` entry matches the client's Cilium security identity by:
+#   - numeric id        e.g. "12345"
+#   - exact label       e.g. "k8s:app=api-server"
+#   - label substring   e.g. "api-server"   (matches k8s:app=api-server)
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: identity-access
+  description: Only approved pod identities may reach the databases.
+  labels:
+    tier: identity
+spec:
+  default_action: deny          # deny unless an allow rule below matches
+  rules:
+    # 1. The application identity may run normal queries.
+    - id: id.allow-api-server
+      name: Allow the api-server identity
+      severity: info
+      identities: [k8s:app=api-server]
+      actions: [allow]
+
+    # 2. A read-only reporting identity may run SELECTs only.
+    - id: id.allow-reporting-reads
+      name: Allow reporting identity read-only
+      severity: info
+      identities: [k8s:app=reporting]
+      query:
+        pattern: '(?i)^\s*select'
+      actions: [allow]
+
+    # 3. Even an allowed identity is denied direct access to PII columns
+    #    (defense in depth: identity gate + column firewall together). This is
+    #    a DENY rule, and first-deny-wins means it overrides the allows above
+    #    when the query touches these columns.
+    - id: id.deny-pii-even-if-allowed
+      name: No raw PII, regardless of identity
+      severity: high
+      columns: [ssn, credit_card]
+      actions: [deny, alert]

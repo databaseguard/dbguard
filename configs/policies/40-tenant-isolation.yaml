@@ -1,0 +1,40 @@
+# Cross-tenant isolation (users list = DB accounts, see docs/policies.md).
+#
+# Two logical tenants share one database cluster; each tenant's service
+# account must never touch the other's tables. The users matcher is a
+# subject filter: the rule fires only when the named account is the one
+# issuing the statement. Pair this with the kernel-side tenant_guard.bpf.c
+# (filesystem + cgroup isolation, tenant: section in dbguard.yaml) for
+# host-level enforcement.
+#
+# Seeding for a quick test:
+#   CREATE TABLE users_tenant_a (id INT, note TEXT);
+#   CREATE TABLE users_tenant_b (id INT, note TEXT);
+#   CREATE USER tenant_a_svc ...; CREATE USER tenant_b_svc ...;
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: tenant-isolation
+  description: Deny tenant A service account on tenant B tables and vice versa.
+  labels:
+    tier: multi-tenant
+spec:
+  default_action: allow
+  rules:
+    - id: tenant.a_isolation
+      name: Tenant A table isolation
+      description: tenant_b_svc must never read or write users_tenant_a.
+      severity: critical
+      engines: [postgres, mysql]
+      tables: [users_tenant_a]
+      users: [tenant_b_svc]
+      actions: [deny, alert]
+
+    - id: tenant.b_isolation
+      name: Tenant B table isolation
+      description: tenant_a_svc must never read or write users_tenant_b.
+      severity: critical
+      engines: [postgres, mysql]
+      tables: [users_tenant_b]
+      users: [tenant_a_svc]
+      actions: [deny, alert]

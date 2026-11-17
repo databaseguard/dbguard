@@ -1,0 +1,34 @@
+# RBAC for DBGuard identity resolution: the agent reads node/pod metadata
+# to map cgroups and container IDs onto workloads. It never writes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dbguard
+  namespace: dbguard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dbguard
+rules:
+  # Node metadata is used to tag events with the monitored host.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "watch", "list"]
+  # Pods/endpoints drive cgroup -> container -> pod identity resolution.
+  - apiGroups: [""]
+    resources: ["pods", "endpoints"]
+    verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dbguard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dbguard
+subjects:
+  - kind: ServiceAccount
+    name: dbguard
+    namespace: dbguard

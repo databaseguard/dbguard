@@ -1,0 +1,22 @@
+# Build output
+/build/
+*.bpf.o
+*.o
+*.a
+
+# Binaries
+/dbguardd
+/dbguard-cli
+cmd/**/dbguardd
+cmd/**/dbguard-cli
+
+# Local/dev
+*.log
+*.jsonl
+.env
+*.zip
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store

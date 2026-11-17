@@ -1,0 +1,67 @@
+# Minimal in-cluster DBGuard configuration (see configs/dbguard.yaml for the
+# fully commented reference). Listens are 0.0.0.0 so the Service can reach
+# the API/metrics endpoints from outside the node.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dbguard-config
+  namespace: dbguard
+  labels:
+    app.kubernetes.io/name: dbguard
+data:
+  dbguard.yaml: |
+    general:
+      name: dbguard
+      data_dir: /var/lib/dbguard
+      pid_file: /run/dbguard.pid
+    logging:
+      level: info
+      format: text
+    ebpf:
+      enabled: true
+      object_dir: /var/lib/dbguard/bpf
+      pin_path: /sys/fs/bpf/dbguard
+      ringbuf_pages: 256
+      ports:
+        postgres: 5432
+        mysql: 3306
+      drop_enabled: true
+      lsm_enabled: true
+      xdp_interfaces: []
+    policies:
+      dirs: [/var/lib/dbguard/policies]
+      watch: true
+    audit:
+      enabled: true
+      store: jsonl
+      dir: /var/lib/dbguard/audit
+      redact_pii: true
+    identity:
+      enabled: true
+      container_hint: auto
+      cilium_enabled: true   # this manifest targets a Cilium cluster; enrichment degrades silently if the socket is absent
+      cilium_api_url: unix:///var/run/cilium/cilium.sock
+    api:
+      enabled: true
+      listen: 0.0.0.0:9700
+      token: ""
+    alerts:
+      min_severity: medium
+      dedup_window_sec: 60
+      sinks:
+        - type: file
+          file: /var/log/dbguard/alerts.jsonl
+    metrics:
+      enabled: true
+      listen: 0.0.0.0:9701
+      path: /metrics
+    # Inline synchronous enforcement proxy. Clients that connect HERE (instead
+    # of directly to postgres) have each statement evaluated BEFORE postgres
+    # runs it, so a denied query is rejected at the wire - deterministic, not
+    # the reactive best-effort of the uprobe path. The proxy resolves the
+    # client IP to its Cilium identity for identity-based rules.
+    proxies:
+      - enabled: true
+        engine: postgres
+        listen: 0.0.0.0:6432
+        upstream: postgres:5432

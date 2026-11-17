@@ -1,0 +1,168 @@
+# DEV config: run straight from the repo with no `make install`.
+#   make bpf go-build  &&  sudo ./build/bin/dbguardd -config configs/dbguard.dev.yaml
+# Uses ./build/bpf objects and ./configs/policies, writes state under ./.dbguard-state.
+# For a system install use configs/dbguard.yaml (paths under /var/lib and /etc).
+#
+# DBGuard reference configuration.
+#
+# Every key maps 1:1 onto internal/config/config.go (yaml tags). Sections
+# not listed fall back to internal/config/defaults.go. Validate changes:
+#   dbguard-cli validate-config configs/dbguard.yaml
+
+general:
+  name: dbguard                       # instance name in logs/events
+  data_dir: ./.dbguard-state          # DEV: local state dir (audit, pinned maps)
+  pid_file: /run/dbguard.pid
+
+logging:
+  level: info                         # debug|info|warn|error
+  format: text                        # text|json
+
+# ---------------------------------------------------------------------------
+# eBPF: kernel programs, attachment points and wire hooks.
+# ---------------------------------------------------------------------------
+ebpf:
+  enabled: true
+  object_dir: ./build/bpf              # DEV: use freshly-built objects (make bpf), no install needed
+  pin_path: /sys/fs/bpf/dbguard       # bpffs directory for pinned maps
+  ringbuf_pages: 256                  # 4KB pages per ringbuf (256 = 1MB)
+  ports:                              # well-known DB ports for wire hooks
+    postgres: 5432
+    mysql: 3306
+    # sqlite_port: 7432               # only for TCP front-ends over SQLite
+  drop_enabled: true                 # DEV: denied queries terminate the client connection (set false for detect-only)
+  lsm_enabled: false                  # opt-in: in-kernel file/exec BLOCKING via BPF-LSM.
+                                      # Requires CONFIG_BPF_LSM + "bpf" in /sys/kernel/security/lsm
+                                      # and privilege to load LSM programs. Core RIDS works without it.
+  xdp_interfaces: [lo]                # DEV: sniff loopback so XDP SQLi firewall sees 127.0.0.1 DB traffic
+  attach:                             # uprobes attached into DB binaries
+    postgres_symbols: [exec_simple_query, pg_parse_query]
+    mysql_symbols: [mysql_parse, dispatch_command]  # mysql_parse (PARM2=SQL) preferred; falls back to dispatch_command
+    openssl_symbols: [SSL_write, SSL_read, SSL_new]
+
+# ---------------------------------------------------------------------------
+# Firewall policies (see docs/policies.md and configs/policies/).
+# ---------------------------------------------------------------------------
+policies:
+  dirs: [./configs/policies]          # DEV: policies straight from the repo
+  watch: true                         # hot reload on file changes
+
+audit:
+  enabled: true
+  store: jsonl
+  dir: ./.dbguard-state/audit
+  max_size_mb: 100                    # per-file rotation threshold
+  max_files: 30                       # rotated files kept
+  flush_interval_sec: 2
+  redact_pii: true                    # mask detected PII in the audit trail
+
+pii:
+  enabled: true
+  entropy_threshold: 4.5              # Shannon bits/char for secret-like tokens
+  redact: true                        # mask values in logs/alerts
+  alert_only: true                    # never deny; observe first
+
+sqli:
+  enabled: true
+  sensitivity: medium                 # low|medium|high
+  confidence_threshold: 0.72          # deny above this score
+  in_kernel_drop: false               # kernel-side pre-parser drop (aggressive)
+
+anomaly:
+  enabled: true
+  # window_sec: 60
+  # query_rate_threshold: 80          # queries/sec per client
+  # conn_spike_threshold: 40          # new connections per window
+  # admin_concurrent_max: 3
+  # failed_auth_threshold: 10
+  # baseline_window_min: 30
+
+exfil:
+  enabled: true
+  window_ms: 100                      # byte-density accounting window
+  max_bytes_per_window: 8388608       # 8 MiB per 100ms burst
+  quarantine_sec: 30                  # offender cool-down
+  reset_enabled: false                # inject TCP RST for offenders
+
+rids:
+  enabled: true
+  alert_only: true                    # false = kill/freeze offenders
+  blocked_binaries:                   # never allowed to exec from DB context
+    - /bin/sh
+    - /bin/bash
+    - /bin/dash
+    - /usr/bin/wget
+    - /usr/bin/curl
+    - /usr/bin/nc
+    - /usr/bin/python3
+    - /usr/bin/perl
+  protected_paths: [/var/lib/postgresql, /var/lib/mysql]
+  fim:
+    enabled: true
+    dirs: [/var/lib/postgresql, /var/lib/mysql]
+    interval_sec: 300
+
+lineage:
+  enabled: true
+  correlation_window_sec: 30
+  teardown_enabled: false
+  runtime_probes:                     # uprobes for HTTP-route context (feature 8)
+    - binary: myapp
+      symbol: main.handleRequest
+      kind: go
+
+tenant:
+  enabled: false
+  tenants: []                         # see docs/policies.md example 4
+
+identity:
+  enabled: true
+  container_hint: auto                # auto|docker|containerd|crio
+  cilium_enabled: false               # enrich events with Cilium security ids
+  cilium_api_url: http://127.0.0.1:9879   # http stub for single-host tests; real agent = unix:///var/run/cilium/cilium.sock
+
+api:
+  enabled: true
+  listen: 127.0.0.1:9700
+  token: ""                           # empty = no auth (bind loopback only!)
+
+alerts:
+  min_severity: medium                # router severity floor
+  dedup_window_sec: 60
+  sinks:
+    - type: file
+      file: ./.dbguard-state/alerts.jsonl   # DEV: repo-local, no root needed
+    # DEV: webhook disabled by default (nothing listens on :18080 -> connection
+    # refused spam). Uncomment and point at a real receiver to use it.
+    # - type: webhook
+    #   url: http://localhost:18080/hook
+    #   timeout_sec: 5
+    # - type: slack
+    #   url: https://hooks.slack.com/services/XXX/YYY/ZZZ
+    # - type: syslog
+    #   host: 10.0.0.9
+    #   port: 514
+    #   facility: local0
+
+metrics:
+  enabled: true
+  listen: 127.0.0.1:9701
+  path: /metrics
+
+# Synchronous inline enforcement proxy (the novel feature): clients connect to
+# `listen` instead of the DB; denied queries are rejected BEFORE reaching the
+# database, so no rows ever return for a blocked statement - even trivial fast
+# queries. Point your app at 127.0.0.1:6432 (sslmode=disable) to use it.
+# Multiple listeners run at once: Postgres on 6432 AND MySQL on 6433. Point your
+# app at the matching proxy port; denied queries are rejected inline before the
+# database ever sees them. (A single `proxy:` block is still accepted for
+# back-compat; `proxies:` takes precedence when present.)
+proxies:
+  - enabled: true
+    listen: 127.0.0.1:6432
+    upstream: 127.0.0.1:5432
+    engine: postgres
+  - enabled: true
+    listen: 127.0.0.1:6433
+    upstream: 127.0.0.1:3306
+    engine: mysql

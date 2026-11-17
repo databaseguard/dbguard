@@ -1,0 +1,45 @@
+# PII protection policy.
+#
+# pii.cc.tables monitors statements touching the sensitive columns seeded by
+# scripts/setup-dbs.sh and asks the pipeline to MASK occurrences in logs,
+# alerts and the audit trail (action: mask). It does not deny: alert_only is
+# the recommended first phase; flip to [deny, alert, mask] after baselining.
+#
+# pii.bulk_select throttles full-table reads of PII tables; the rate limiter
+# keys on rule + subject (user/client), see docs/policies.md.
+api_version: dbguard.io/v1
+kind: DbGuardPolicy
+metadata:
+  name: pii-protection
+  description: Monitor and mask credit-card/SSN/salary access; rate-limit bulk selects.
+  labels:
+    tier: pii
+spec:
+  default_action: allow
+  rules:
+    - id: pii.cc.tables
+      name: PII column access on sensitive tables
+      description: >
+        Flags SELECT/INSERT/UPDATE statements naming credit_card, ssn or
+        salary columns on protected tables; values are masked in outputs.
+      severity: high
+      engines: [postgres, mysql, sqlite]
+      tables: [customers, employees]
+      columns: [credit_card, ssn, salary]
+      query:
+        pattern: '(?i)(select|insert|update).*(credit_card|ssn|salary)'
+      actions: [alert, mask]
+
+    - id: pii.bulk_select
+      name: Repeated bulk SELECT over PII tables
+      description: >
+        SELECT * against PII tables is normal for backups but abnormal for
+        app users; two occurrences within one minute trip this rule.
+      severity: medium
+      engines: [postgres, mysql, sqlite]
+      query:
+        pattern: '(?i)select\s+\*.*from\s+(customers|employees)'
+      rate:
+        events: 2
+        window: 1m
+      actions: [alert]

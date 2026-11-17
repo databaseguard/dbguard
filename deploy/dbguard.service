@@ -1,0 +1,26 @@
+[Unit]
+Description=DBGuard — eBPF database security (PostgreSQL/MySQL)
+Documentation=https://github.com/databaseguard/dbguard
+# Start after the databases so the uprobes find their targets on boot.
+After=network-online.target postgresql.service mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# eBPF (uprobes, XDP, maps) needs root. WorkingDirectory holds configs/ and
+# the state dir; __DBGUARD_DIR__ is replaced by scripts/install-service.sh.
+WorkingDirectory=__DBGUARD_DIR__
+ExecStart=__DBGUARD_DIR__/build/bin/dbguardd --config __DBGUARD_DIR__/configs/dbguard.dev.yaml
+# Auto-restart if it ever exits — this is what ends the "daemon keeps dying"
+# and stale-port cycle: systemd owns the single instance.
+Restart=always
+RestartSec=2
+# Give it a moment to release listening sockets between restarts.
+TimeoutStopSec=5
+KillSignal=SIGTERM
+# Reasonable hardening while still allowing eBPF + process signalling.
+LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

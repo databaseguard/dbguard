@@ -1,0 +1,87 @@
+# DBGuard local stack: the agent plus target databases.
+#
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml --profile attack run --rm attacker
+#
+# dbguard needs privileged + host PID/cgroup because it loads eBPF programs
+# against host kernel subsystems (cgroup_skb, LSM, XDP) and uprobes the host
+# database processes. Database traffic from containers traverses the host
+# cgroups, so the agent still sees it.
+
+services:
+  dbguard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: dbguard:latest
+    container_name: dbguard
+    privileged: true          # BPF program load/attach, map pinning
+    pid: "host"               # uprobes must address host DB processes
+    cgroup: host              # cgroup-skb hooks need the host cgroup root
+    command: ["-config", "/etc/dbguard/dbguard.yaml"]
+    volumes:
+      - /sys/kernel:/sys/kernel:ro
+      - /sys/fs/bpf:/sys/fs/bpf
+      - /sys/fs/cgroup:/sys/fs/cgroup
+      - /var/run:/var/run:ro
+      - ../configs/dbguard.yaml:/etc/dbguard/dbguard.yaml:ro
+      - ../configs/policies:/etc/dbguard/policies:ro
+      - dbguard-data:/var/lib/dbguard
+    ports:
+      - "127.0.0.1:9700:9700"   # admin REST API
+      - "127.0.0.1:9701:9701"   # Prometheus metrics
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [dbguard-net]
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dbguard-postgres
+    environment:
+      POSTGRES_PASSWORD: dbguard
+      POSTGRES_DB: dbguard_test
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dbguard_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [dbguard-net]
+
+  mysql:
+    image: mysql:8.0
+    container_name: dbguard-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: dbguard
+      MYSQL_DATABASE: dbguard_test
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [dbguard-net]
+
+  # Attack container used by test/integration/run.sh and scripts/demo.sh
+  # (--profile attack). It holds psql/mysql clients and sleeps so exec works.
+  attacker:
+    image: alpine:3.20
+    container_name: dbguard-attacker
+    entrypoint: ["sleep", "infinity"]
+    profiles: ["attack"]
+    volumes:
+      - ../test/integration:/sim:ro
+    networks: [dbguard-net]
+
+volumes:
+  dbguard-data:
+
+networks:
+  dbguard-net:
+    driver: bridge
