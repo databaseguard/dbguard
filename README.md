@@ -103,6 +103,31 @@ a running agent without downtime.
    └─────────────┘        └──────────────────┘
 ```
 
+## Performance
+
+The two planes have very different cost profiles, and the distinction matters when you plan
+a deployment.
+
+**The detection plane adds essentially no latency to your queries.** The uprobe captures a
+statement into a ring buffer and returns immediately; delivery to userspace is asynchronous,
+so the database syscall never waits on dbguard. Per-event kernel work is fixed and O(1) - a
+bounded SQL capture and a handful of map lookups — and the policy evaluation happens off the
+hot path in microseconds.
+
+Because that path is asynchronous, its *reactive* enforcement has a small delay: roughly
+5–10 ms between a statement being observed and a denied session being terminated. The
+queries that matter most for exfiltration and injection - bulk reads, `SELECT *` over large
+tables, time-based probes - run long enough to be killed mid-flight, and their data never
+returns. A trivial sub-millisecond query can occasionally return its single result before
+the kill lands; the session is still terminated and recorded as denied.
+
+**The enforcement plane trades a little latency for a hard guarantee.** When a connection is
+routed through the inline proxy, each statement is parsed and evaluated before it is
+forwarded, so nothing reaches the database until the policy allows it. The added cost is a
+local proxy hop plus wire-protocol parsing plus the same policy evaluation - small, but
+genuinely in-line. Use it wherever a block must be certain and race-free; use the detection
+plane everywhere auditing and alerting are enough.
+
 ## Quick start
 
 **Requirements:** Linux with a recent kernel, clang/LLVM to compile the eBPF objects, and
@@ -168,17 +193,6 @@ Kubernetes guide covers the details that matter - why the agent needs `hostPID` 
 deliberately avoids `hostNetwork`, how workload identity is resolved through the Cilium
 agent, and how to hot-load a rule into a running pod.
 
-## Repository layout
-
-```
-cmd/         the dbguardd daemon and the dbguard-cli admin tool
-bpf/         eBPF C sources and shared headers
-internal/    Go packages - ebpf, proxy, policy, pipeline, identity, pii, and more
-configs/     a sample dbguard.yaml and a starter policy bundle
-deploy/      Dockerfile, Kubernetes manifests, Cilium policy, systemd unit
-docs/        design notes
-test/        integration tests
-```
 
 ## Documentation
 
