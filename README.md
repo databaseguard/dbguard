@@ -146,7 +146,7 @@ sudo ./build/bin/dbguardd -config configs/dbguard.yaml
 
 With the daemon running, issue a few queries and read them back from the API, or point an
 application at the proxy port to put a rule directly in the request path. The
-[installation](https://databaseguard.github.io/) and quick-start guides cover both a
+[installation](https://databaseguard.github.io/guides/installation.html) and quick-start guides cover both a
 single-host `systemd` setup and a Kubernetes DaemonSet.
 
 ## Writing policies
@@ -180,7 +180,7 @@ dbguard-cli dry-run --engine postgres --sql "UPDATE employees SET salary = 0 WHE
 # -> denied, rule emp.no-update
 ```
 
-The [rule-writing cookbook](https://databaseguard.github.io/) in the documentation walks
+The [rule-writing cookbook](https://databaseguard.github.io/features/writing-rules.html) in the documentation walks
 through write protection, column- and value-level rules, allow-lists, and the
 parameterized-query caveats in detail.
 
